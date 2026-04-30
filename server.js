@@ -22,11 +22,36 @@ const io = new Server(server, {
 });
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
+  maxRetries: 3,
+  timeout: 60000
 });
 
 let waitingUser = null;
 const userRooms = new Map();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function transcribeAudio(audioFile) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await openai.audio.transcriptions.create({
+        file: audioFile,
+        model: "whisper-1"
+      });
+    } catch (error) {
+      lastError = error;
+      console.log("Transcription retry:", attempt, error?.message || error);
+      await sleep(1200 * attempt);
+    }
+  }
+
+  throw lastError;
+}
 
 async function translateText(text, targetLanguage = "English") {
   const completion = await openai.chat.completions.create({
@@ -126,20 +151,22 @@ io.on("connection", (socket) => {
     try {
       if (!roomId || !audioBase64) return;
 
-     const base64Data = audioBase64.split(",")[1];
+      const base64Data = audioBase64.split(",")[1];
       if (!base64Data) return;
+
       const audioBuffer = Buffer.from(base64Data, "base64");
 
       if (!audioBuffer || audioBuffer.length < 1500) return;
+
+      console.log("Audio size:", audioBuffer.length);
 
       const audioFile = await toFile(audioBuffer, "speech.webm", {
         type: "audio/webm"
       });
 
-      const transcription = await openai.audio.transcriptions.create({
-        file: audioFile,
-        model: "gpt-4o-mini-transcribe"
-      });
+      const transcription = await transcribeAudio(audioFile);
+
+      console.log("TRANSCRIPTION:", transcription.text);
 
       const original = transcription.text?.trim();
 
