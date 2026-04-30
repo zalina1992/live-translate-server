@@ -1,13 +1,21 @@
 {
   "name": "live-translate-server",
   "version": "1.0.0",
-  "description": "Live Translate WebRTC signaling and AI translation server",
+  "description": "Voxlify AI WebRTC signaling + live translation server",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "webrtc",
+    "ai",
+    "translation",
+    "socket.io",
+    "voxlify"
+  ],
+  "author": "Voxlify",
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.5",
