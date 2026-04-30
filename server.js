@@ -126,11 +126,7 @@ io.on("connection", (socket) => {
     try {
       if (!roomId || !audioBase64) return;
 
-      const base64Data = audioBase64.replace(
-        /^data:audio\/[a-zA-Z0-9.+-]+;base64,/,
-        ""
-      );
-
+     const base64Data = audioBase64.split(",")[1];
       const audioBuffer = Buffer.from(base64Data, "base64");
 
       if (!audioBuffer || audioBuffer.length < 1500) return;
