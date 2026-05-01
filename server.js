@@ -2,18 +2,16 @@ const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
-const OpenAI = require("openai");
-const { toFile } = require("openai/uploads");
 
 const app = express();
 
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({ limit: "2mb" }));
 
 app.get("/", (req, res) => {
   res.json({
     ok: true,
-    name: "Voxlify server",
+    name: "Voxlify text translation server",
     online: io.engine.clientsCount || 0
   });
 });
@@ -22,20 +20,27 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
-  maxHttpBufferSize: 20 * 1024 * 1024,
   pingTimeout: 30000,
   pingInterval: 15000
-});
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  maxRetries: 1,
-  timeout: 45000
 });
 
 let waitingUser = null;
 const userRooms = new Map();
 const busySockets = new Set();
+
+const languageMap = {
+  English: "en",
+  Polish: "pl",
+  Norwegian: "no",
+  Spanish: "es",
+  German: "de",
+  French: "fr",
+  Italian: "it",
+  Portuguese: "pt",
+  Japanese: "ja",
+  Korean: "ko",
+  Arabic: "ar"
+};
 
 function emitOnlineCount() {
   io.emit("online-count", {
@@ -63,35 +68,28 @@ function cleanupSocket(socket) {
   busySockets.delete(socket.id);
 }
 
-async function transcribeAudio(audioBuffer) {
-  const audioFile = await toFile(audioBuffer, "speech.webm", {
-    type: "audio/webm"
+async function translateText(text, targetLanguage = "Polish") {
+  const target = languageMap[targetLanguage] || "pl";
+
+  const response = await fetch("https://libretranslate.de/translate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      q: text,
+      source: "auto",
+      target,
+      format: "text"
+    })
   });
 
-  return openai.audio.transcriptions.create({
-    file: audioFile,
-    model: "whisper-1"
-  });
-}
+  if (!response.ok) {
+    throw new Error("Translation service unavailable");
+  }
 
-async function translateText(text, targetLanguage = "English") {
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.2,
-    messages: [
-      {
-        role: "system",
-        content:
-          "Detect the source language and translate naturally. Return only translated text. No explanations."
-      },
-      {
-        role: "user",
-        content: `Translate to ${targetLanguage}:\n\n${text}`
-      }
-    ]
-  });
-
-  return completion.choices?.[0]?.message?.content?.trim() || "";
+  const data = await response.json();
+  return data.translatedText || "";
 }
 
 io.on("connection", socket => {
@@ -163,49 +161,39 @@ io.on("connection", socket => {
     socket.to(roomId).emit("ice-candidate", { candidate });
   });
 
-  socket.on("audio-chunk", async ({ roomId, audioBase64, targetLanguage }) => {
-    try {
-      if (!roomId || !audioBase64) return;
+  socket.on("speech-interim", ({ roomId, text }) => {
+    if (!roomId || !text) return;
 
+    socket.to(roomId).emit("peer-typing", {
+      text
+    });
+  });
+
+  socket.on("speech-final", async ({ roomId, text, targetLanguage }) => {
+    try {
+      if (!roomId || !text) return;
       if (busySockets.has(socket.id)) return;
+
       busySockets.add(socket.id);
 
-      const base64Data = audioBase64.split(",")[1];
-      if (!base64Data) return;
-
-      const audioBuffer = Buffer.from(base64Data, "base64");
-
-      if (audioBuffer.length < 18000 || audioBuffer.length > 260000) return;
-
-      console.log("Audio:", audioBuffer.length, socket.id);
-
-      const transcription = await transcribeAudio(audioBuffer);
-      const original = transcription.text?.trim();
-
-      if (!original || original.length < 3) return;
+      const cleanText = String(text).trim().slice(0, 500);
+      if (!cleanText) return;
 
       const translated = await translateText(
-        original,
-        targetLanguage || "English"
+        cleanText,
+        targetLanguage || "Polish"
       );
 
-      io.to(roomId).emit("translation-result", {
-        original,
+      socket.to(roomId).emit("translation-result", {
+        original: cleanText,
         translated,
-        targetLanguage: targetLanguage || "English"
+        targetLanguage: targetLanguage || "Polish"
       });
     } catch (error) {
-      const message = error?.message || "Audio translation failed";
-      const code = error?.code || error?.error?.code;
-
-      console.error("Audio translation error:", { message, code });
+      console.error("Translation error:", error.message);
 
       socket.emit("translation-error", {
-        message:
-          code === "insufficient_quota"
-            ? "AI quota exceeded. Add billing or increase limits."
-            : "AI translation temporarily unavailable.",
-        code
+        message: "Translation temporarily unavailable."
       });
     } finally {
       busySockets.delete(socket.id);
