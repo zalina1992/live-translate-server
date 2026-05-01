@@ -46,7 +46,7 @@ app.get("/", (req, res) => {
   res.json({
     ok: true,
     name: "Voxlify server",
-    online: io.engine.clientsCount || 0
+    online: io.of("/").sockets.size
   });
 });
 
