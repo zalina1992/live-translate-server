@@ -1,6 +1,3 @@
-const dns = require("dns");
-dns.setDefaultResultOrder("ipv4first");
-
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
@@ -11,28 +8,34 @@ const { toFile } = require("openai/uploads");
 const app = express();
 
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "20mb" }));
 
 app.get("/", (req, res) => {
-  res.send("Live Translate WebRTC Server is running");
+  res.json({
+    ok: true,
+    name: "Voxlify server",
+    online: io.engine.clientsCount || 0
+  });
 });
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
-  maxHttpBufferSize: 50 * 1024 * 1024
+  maxHttpBufferSize: 20 * 1024 * 1024,
+  pingTimeout: 30000,
+  pingInterval: 15000
 });
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  maxRetries: 0,
-  timeout: 90000
+  maxRetries: 1,
+  timeout: 45000
 });
 
 let waitingUser = null;
 const userRooms = new Map();
-const socketBusy = new Map();
+const busySockets = new Set();
 
 function emitOnlineCount() {
   io.emit("online-count", {
@@ -40,120 +43,93 @@ function emitOnlineCount() {
   });
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+function cleanupSocket(socket) {
+  if (waitingUser === socket.id) waitingUser = null;
 
-async function transcribeAudio(audioFile) {
-  let lastError;
+  const roomId = userRooms.get(socket.id);
 
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      return await openai.audio.transcriptions.create({
-        file: audioFile,
-        model: "whisper-1"
-      });
-    } catch (error) {
-      lastError = error;
+  if (roomId) {
+    socket.to(roomId).emit("partner-left");
 
-      console.log(
-        `Transcription retry ${attempt}:`,
-        error?.message || error?.cause?.code || error
-      );
-
-      await sleep(2500 * attempt);
+    const clients = io.sockets.adapter.rooms.get(roomId);
+    if (clients) {
+      for (const id of clients) {
+        userRooms.delete(id);
+      }
     }
   }
 
-  throw lastError;
+  userRooms.delete(socket.id);
+  busySockets.delete(socket.id);
+}
+
+async function transcribeAudio(audioBuffer) {
+  const audioFile = await toFile(audioBuffer, "speech.webm", {
+    type: "audio/webm"
+  });
+
+  return openai.audio.transcriptions.create({
+    file: audioFile,
+    model: "whisper-1"
+  });
 }
 
 async function translateText(text, targetLanguage = "English") {
-  let lastError;
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.2,
+    messages: [
+      {
+        role: "system",
+        content:
+          "Detect the source language and translate naturally. Return only translated text. No explanations."
+      },
+      {
+        role: "user",
+        content: `Translate to ${targetLanguage}:\n\n${text}`
+      }
+    ]
+  });
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a live video chat translation engine. Detect the source language and translate naturally. Return only the translated text. No explanations."
-          },
-          {
-            role: "user",
-            content: `Translate this to ${targetLanguage}:\n\n${text}`
-          }
-        ]
-      });
-
-      return completion.choices?.[0]?.message?.content?.trim() || "";
-    } catch (error) {
-      lastError = error;
-      console.log(`Translation retry ${attempt}:`, error?.message || error);
-      await sleep(1800 * attempt);
-    }
-  }
-
-  throw lastError;
+  return completion.choices?.[0]?.message?.content?.trim() || "";
 }
 
-app.get("/openai-test", async (req, res) => {
-  try {
-    const translated = await translateText("Cześć, jak się masz?", "English");
-
-    res.json({
-      ok: true,
-      translated
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      message: error?.message || "OpenAI test failed",
-      code: error?.cause?.code || error?.code || null
-    });
-  }
-});
-
-io.on("connection", (socket) => {
+io.on("connection", socket => {
   console.log("Connected:", socket.id);
   emitOnlineCount();
 
-  socket.on("find-match", ({ country, gender } = {}) => {
-    socket.data.country = country || null;
-    socket.data.gender = gender || "any";
+  socket.on("get-online-count", emitOnlineCount);
+
+  socket.on("find-match", () => {
+    cleanupSocket(socket);
 
     if (waitingUser && waitingUser !== socket.id) {
-      const roomId = `room-${waitingUser}-${socket.id}`;
-      const waitingSocket = io.sockets.sockets.get(waitingUser);
+      const partnerSocket = io.sockets.sockets.get(waitingUser);
 
-      if (!waitingSocket) {
+      if (!partnerSocket) {
         waitingUser = socket.id;
         socket.emit("waiting");
         return;
       }
 
+      const roomId = `room-${waitingUser}-${socket.id}`;
+
       socket.join(roomId);
-      waitingSocket.join(roomId);
+      partnerSocket.join(roomId);
 
       userRooms.set(socket.id, roomId);
       userRooms.set(waitingUser, roomId);
 
-      waitingSocket.emit("matched", {
+      partnerSocket.emit("matched", {
         roomId,
         initiator: true,
-        peerId: socket.id,
-        peerCountry: socket.data.country,
-        peerGender: socket.data.gender
+        peerId: socket.id
       });
 
       socket.emit("matched", {
         roomId,
         initiator: false,
-        peerId: waitingUser,
-        peerCountry: waitingSocket.data.country,
-        peerGender: waitingSocket.data.gender
+        peerId: waitingUser
       });
 
       waitingUser = null;
@@ -161,6 +137,18 @@ io.on("connection", (socket) => {
       waitingUser = socket.id;
       socket.emit("waiting");
     }
+
+    emitOnlineCount();
+  });
+
+  socket.on("leave-room", ({ roomId }) => {
+    if (roomId) {
+      socket.to(roomId).emit("partner-left");
+      socket.leave(roomId);
+    }
+
+    cleanupSocket(socket);
+    emitOnlineCount();
   });
 
   socket.on("offer", ({ roomId, offer }) => {
@@ -175,68 +163,26 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("ice-candidate", { candidate });
   });
 
-  socket.on("chat-message", ({ roomId, message }) => {
-    socket.to(roomId).emit("chat-message", { message });
-  });
-
-  socket.on("translate-message", async ({ roomId, text, targetLanguage }) => {
-    try {
-      if (!roomId || !text) return;
-
-      const translated = await translateText(text, targetLanguage || "English");
-
-      io.to(roomId).emit("translation-result", {
-        original: text,
-        translated,
-        targetLanguage: targetLanguage || "English"
-      });
-    } catch (error) {
-      console.error("Translation error:", error?.message || error);
-
-      socket.emit("translation-error", {
-        message: "Translation failed"
-      });
-    }
-  });
-
   socket.on("audio-chunk", async ({ roomId, audioBase64, targetLanguage }) => {
     try {
       if (!roomId || !audioBase64) return;
 
-      if (socketBusy.get(socket.id)) {
-        return;
-      }
-
-      socketBusy.set(socket.id, true);
+      if (busySockets.has(socket.id)) return;
+      busySockets.add(socket.id);
 
       const base64Data = audioBase64.split(",")[1];
-      if (!base64Data) {
-        socketBusy.set(socket.id, false);
-        return;
-      }
+      if (!base64Data) return;
 
       const audioBuffer = Buffer.from(base64Data, "base64");
 
-      if (!audioBuffer || audioBuffer.length < 3000) {
-        socketBusy.set(socket.id, false);
-        return;
-      }
+      if (audioBuffer.length < 18000 || audioBuffer.length > 260000) return;
 
-      console.log("Audio size:", audioBuffer.length);
+      console.log("Audio:", audioBuffer.length, socket.id);
 
-      const audioFile = await toFile(audioBuffer, "speech.webm", {
-        type: "audio/webm"
-      });
-
-      const transcription = await transcribeAudio(audioFile);
+      const transcription = await transcribeAudio(audioBuffer);
       const original = transcription.text?.trim();
 
-      console.log("TRANSCRIPTION:", original);
-
-      if (!original || original.length < 2) {
-        socketBusy.set(socket.id, false);
-        return;
-      }
+      if (!original || original.length < 3) return;
 
       const translated = await translateText(
         original,
@@ -248,45 +194,33 @@ io.on("connection", (socket) => {
         translated,
         targetLanguage: targetLanguage || "English"
       });
-
-      socketBusy.set(socket.id, false);
     } catch (error) {
-      socketBusy.set(socket.id, false);
+      const message = error?.message || "Audio translation failed";
+      const code = error?.code || error?.error?.code;
 
-      console.error("Audio translation error:", {
-        message: error?.message,
-        code: error?.code || error?.cause?.code,
-        cause: error?.cause?.message || error?.cause
-      });
+      console.error("Audio translation error:", { message, code });
 
       socket.emit("translation-error", {
-        message: "Audio translation failed"
+        message:
+          code === "insufficient_quota"
+            ? "AI quota exceeded. Add billing or increase limits."
+            : "AI translation temporarily unavailable.",
+        code
       });
+    } finally {
+      busySockets.delete(socket.id);
     }
   });
 
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
-
-    socketBusy.delete(socket.id);
-
-    if (waitingUser === socket.id) {
-      waitingUser = null;
-    }
-
-    const roomId = userRooms.get(socket.id);
-
-    if (roomId) {
-      socket.to(roomId).emit("partner-left");
-      userRooms.delete(socket.id);
-    }
-
-    setTimeout(emitOnlineCount, 100);
+    cleanupSocket(socket);
+    emitOnlineCount();
   });
 });
 
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Voxlify server running on port ${PORT}`);
 });
