@@ -99,56 +99,43 @@ async function translateText(text, targetLanguage = "Polish") {
     return translationCache.get(cacheKey);
   }
 
-  const endpoints = [
-    "https://translate.argosopentech.com/translate",
-    "https://libretranslate.de/translate"
-  ];
+  try {
+    const url =
+      "https://translate.googleapis.com/translate_a/single?client=gtx" +
+      "&sl=auto" +
+      `&tl=${encodeURIComponent(target)}` +
+      "&dt=t" +
+      `&q=${encodeURIComponent(clean)}`;
 
-  let lastError;
-
-  for (const url of endpoints) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-
-      const response = await fetch(url, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          q: clean,
-          source: "auto",
-          target,
-          format: "text"
-        })
-      });
-
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        throw new Error(`Translate HTTP ${response.status}`);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "User-Agent": "Mozilla/5.0"
       }
+    });
 
-      const data = await response.json();
-      const translated = data.translatedText || clean;
-
-      translationCache.set(cacheKey, translated);
-
-      if (translationCache.size > 1000) {
-        const firstKey = translationCache.keys().next().value;
-        translationCache.delete(firstKey);
-      }
-
-      return translated;
-    } catch (error) {
-      lastError = error;
+    if (!response.ok) {
+      throw new Error(`Google translate HTTP ${response.status}`);
     }
-  }
 
-  console.error("Translate failed:", lastError?.message || lastError);
-  return clean;
+    const data = await response.json();
+
+    const translated = Array.isArray(data?.[0])
+      ? data[0].map(part => part[0]).join("")
+      : clean;
+
+    translationCache.set(cacheKey, translated);
+
+    if (translationCache.size > 1000) {
+      const firstKey = translationCache.keys().next().value;
+      translationCache.delete(firstKey);
+    }
+
+    return translated || clean;
+  } catch (error) {
+    console.error("Translate failed:", error.message);
+    return clean;
+  }
 }
 
 io.on("connection", socket => {
