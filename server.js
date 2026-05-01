@@ -78,16 +78,22 @@ function cleanupSocket(socket) {
   const roomId = userRooms.get(socket.id);
 
   if (roomId) {
-    socket.to(roomId).emit("partner-left");
-
     const clients = io.sockets.adapter.rooms.get(roomId);
+
     if (clients) {
       for (const id of clients) {
         userRooms.delete(id);
+
+        const s = io.sockets.sockets.get(id);
+        if (s) {
+          s.leave(roomId);
+        }
+
+        if (id !== socket.id) {
+          io.to(id).emit("partner-left");
+        }
       }
     }
-
-    socket.leave(roomId);
   }
 
   userRooms.delete(socket.id);
