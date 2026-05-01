@@ -52,7 +52,7 @@ app.get("/", (req, res) => {
 
 function emitOnlineCount() {
   io.emit("online-count", {
-    count: io.engine.clientsCount || 0
+    count: io.of("/").sockets.size
   });
 }
 
