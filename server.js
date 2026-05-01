@@ -166,7 +166,7 @@ io.on("connection", socket => {
 
   socket.on("find-match", data => {
     cleanupSocket(socket);
-
+console.log("find-match:", socket.id, "waiting:", waitingUsers.length, "online:", io.of("/").sockets.size);
     profiles.set(socket.id, {
       country: data?.country || null,
       gender: data?.gender || "any",
