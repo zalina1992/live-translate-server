@@ -231,10 +231,10 @@ console.log("find-match:", socket.id, "waiting:", waitingUsers.length, "online:"
     emitOnlineCount();
   });
 
-  socket.on("leave-room", () => {
-    cleanupSocket(socket);
-    emitOnlineCount();
-  });
+socket.on("leave-room", () => {
+  cleanupSocket(socket);
+  emitOnlineCount();
+});
 
   socket.on("offer", ({ roomId, offer }) => {
     if (!roomId || !offer) return;
