@@ -171,68 +171,110 @@ io.on("connection", socket => {
   });
 
   socket.on("find-match", data => {
-    cleanupSocket(socket);
-console.log("find-match:", socket.id, "waiting:", waitingUsers.length, "online:", io.of("/").sockets.size);
-    profiles.set(socket.id, {
-      country: data?.country || null,
-      gender: data?.gender || "any",
-      speakLanguage: data?.speakLanguage || "English"
-    });
+  if (userRooms.has(socket.id)) return;
 
-    let partnerId = null;
+  removeFromWaiting(socket.id);
 
-    while (waitingUsers.length > 0 && !partnerId) {
-      const candidateId = waitingUsers.shift();
-      if (candidateId === socket.id) continue;
+  console.log("find-match:", socket.id, "waiting:", waitingUsers.length, "online:", io.of("/").sockets.size);
 
-      const candidateSocket = io.sockets.sockets.get(candidateId);
-
-      if (candidateSocket && !userRooms.has(candidateId)) {
-        partnerId = candidateId;
-      }
-    }
-
-    if (!partnerId) {
-      if (!waitingUsers.includes(socket.id)) waitingUsers.push(socket.id);
-      socket.emit("waiting");
-      emitOnlineCount();
-      return;
-    }
-
-    const partnerSocket = io.sockets.sockets.get(partnerId);
-
-    if (!partnerSocket) {
-      if (!waitingUsers.includes(socket.id)) waitingUsers.push(socket.id);
-      socket.emit("waiting");
-      emitOnlineCount();
-      return;
-    }
-
-    const roomId = `room-${partnerId}-${socket.id}`;
-
-    socket.join(roomId);
-    partnerSocket.join(roomId);
-
-    userRooms.set(socket.id, roomId);
-    userRooms.set(partnerId, roomId);
-
-    partnerSocket.emit("matched", {
-      roomId,
-      initiator: true,
-      peerId: socket.id
-    });
-
-    socket.emit("matched", {
-      roomId,
-      initiator: false,
-      peerId: partnerId
-    });
-
-    emitOnlineCount();
+  profiles.set(socket.id, {
+    country: data?.country || null,
+    gender: data?.gender || "any",
+    speakLanguage: data?.speakLanguage || "English"
   });
 
-socket.on("leave-room", () => {
-  cleanupSocket(socket);
+  let partnerId = null;
+
+  while (waitingUsers.length > 0 && !partnerId) {
+    const candidateId = waitingUsers.shift();
+    if (candidateId === socket.id) continue;
+
+    const candidateSocket = io.sockets.sockets.get(candidateId);
+
+    if (candidateSocket && !userRooms.has(candidateId)) {
+      partnerId = candidateId;
+    }
+  }
+
+  if (!partnerId) {
+    if (!waitingUsers.includes(socket.id)) {
+      waitingUsers.push(socket.id);
+    }
+
+    socket.emit("waiting");
+    emitOnlineCount();
+    return;
+  }
+
+  const partnerSocket = io.sockets.sockets.get(partnerId);
+
+  if (!partnerSocket) {
+    if (!waitingUsers.includes(socket.id)) {
+      waitingUsers.push(socket.id);
+    }
+
+    socket.emit("waiting");
+    emitOnlineCount();
+    return;
+  }
+
+  const roomId = `room-${Date.now()}-${partnerId}-${socket.id}`;
+
+  socket.join(roomId);
+  partnerSocket.join(roomId);
+
+  userRooms.set(socket.id, roomId);
+  userRooms.set(partnerId, roomId);
+
+  const myProfile = profiles.get(socket.id) || {};
+  const partnerProfile = profiles.get(partnerId) || {};
+
+  partnerSocket.emit("matched", {
+    roomId,
+    initiator: true,
+    peerId: socket.id,
+    peerProfile: myProfile
+  });
+
+  socket.emit("matched", {
+    roomId,
+    initiator: false,
+    peerId: partnerId,
+    peerProfile: partnerProfile
+  });
+
+  emitOnlineCount();
+});
+
+socket.on("leave-room", data => {
+  const roomId = userRooms.get(socket.id);
+
+  removeFromWaiting(socket.id);
+
+  if (!roomId) {
+    emitOnlineCount();
+    return;
+  }
+
+  const partnerId = getPartnerId(roomId, socket.id);
+
+  socket.leave(roomId);
+  userRooms.delete(socket.id);
+  busySockets.delete(socket.id);
+
+  if (partnerId) {
+    const partnerSocket = io.sockets.sockets.get(partnerId);
+
+    userRooms.delete(partnerId);
+
+    if (partnerSocket) {
+      partnerSocket.leave(roomId);
+      partnerSocket.emit("partner-left", {
+        manualStop: data?.manualStop === true
+      });
+    }
+  }
+
   emitOnlineCount();
 });
 
