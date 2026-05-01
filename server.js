@@ -30,6 +30,12 @@ const openai = new OpenAI({
 let waitingUser = null;
 const userRooms = new Map();
 
+function emitOnlineCount() {
+  io.emit("online-count", {
+    count: io.engine.clientsCount || 0
+  });
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -74,8 +80,12 @@ async function translateText(text, targetLanguage = "English") {
 
 io.on("connection", (socket) => {
   console.log("Connected:", socket.id);
+  emitOnlineCount();
 
-  socket.on("find-match", () => {
+  socket.on("find-match", ({ country, gender } = {}) => {
+    socket.data.country = country || null;
+    socket.data.gender = gender || "any";
+
     if (waitingUser && waitingUser !== socket.id) {
       const roomId = `room-${waitingUser}-${socket.id}`;
       const waitingSocket = io.sockets.sockets.get(waitingUser);
@@ -95,13 +105,17 @@ io.on("connection", (socket) => {
       waitingSocket.emit("matched", {
         roomId,
         initiator: true,
-        peerId: socket.id
+        peerId: socket.id,
+        peerCountry: socket.data.country,
+        peerGender: socket.data.gender
       });
 
       socket.emit("matched", {
         roomId,
         initiator: false,
-        peerId: waitingUser
+        peerId: waitingUser,
+        peerCountry: waitingSocket.data.country,
+        peerGender: waitingSocket.data.gender
       });
 
       waitingUser = null;
@@ -204,6 +218,8 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("partner-left");
       userRooms.delete(socket.id);
     }
+
+    setTimeout(emitOnlineCount, 100);
   });
 });
 
