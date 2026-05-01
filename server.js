@@ -8,14 +8,6 @@ const app = express();
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json({ limit: "2mb" }));
 
-app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    name: "Voxlify text translation server",
-    online: io.engine.clientsCount || 0
-  });
-});
-
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -24,9 +16,11 @@ const io = new Server(server, {
   pingInterval: 15000
 });
 
-let waitingUser = null;
+const waitingUsers = [];
 const userRooms = new Map();
 const busySockets = new Set();
+const profiles = new Map();
+const translationCache = new Map();
 
 const languageMap = {
   English: "en",
@@ -42,14 +36,38 @@ const languageMap = {
   Arabic: "ar"
 };
 
+app.get("/", (req, res) => {
+  res.json({
+    ok: true,
+    name: "Voxlify server",
+    online: io.engine.clientsCount || 0
+  });
+});
+
 function emitOnlineCount() {
   io.emit("online-count", {
     count: io.engine.clientsCount || 0
   });
 }
 
+function removeFromWaiting(socketId) {
+  const index = waitingUsers.indexOf(socketId);
+  if (index !== -1) waitingUsers.splice(index, 1);
+}
+
+function getPartnerId(roomId, socketId) {
+  const clients = io.sockets.adapter.rooms.get(roomId);
+  if (!clients) return null;
+
+  for (const id of clients) {
+    if (id !== socketId) return id;
+  }
+
+  return null;
+}
+
 function cleanupSocket(socket) {
-  if (waitingUser === socket.id) waitingUser = null;
+  removeFromWaiting(socket.id);
 
   const roomId = userRooms.get(socket.id);
 
@@ -62,6 +80,8 @@ function cleanupSocket(socket) {
         userRooms.delete(id);
       }
     }
+
+    socket.leave(roomId);
   }
 
   userRooms.delete(socket.id);
@@ -70,71 +90,143 @@ function cleanupSocket(socket) {
 
 async function translateText(text, targetLanguage = "Polish") {
   const target = languageMap[targetLanguage] || "pl";
+  const clean = String(text || "").trim().slice(0, 500);
 
-  const response = await fetch("https://libretranslate.de/translate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      q: text,
-      source: "auto",
-      target,
-      format: "text"
-    })
-  });
+  if (!clean) return "";
 
-  if (!response.ok) {
-    throw new Error("Translation service unavailable");
+  const cacheKey = `${target}:${clean.toLowerCase()}`;
+  if (translationCache.has(cacheKey)) {
+    return translationCache.get(cacheKey);
   }
 
-  const data = await response.json();
-  return data.translatedText || "";
+  const endpoints = [
+    "https://translate.argosopentech.com/translate",
+    "https://libretranslate.de/translate"
+  ];
+
+  let lastError;
+
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          q: clean,
+          source: "auto",
+          target,
+          format: "text"
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Translate HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      const translated = data.translatedText || clean;
+
+      translationCache.set(cacheKey, translated);
+
+      if (translationCache.size > 1000) {
+        const firstKey = translationCache.keys().next().value;
+        translationCache.delete(firstKey);
+      }
+
+      return translated;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  console.error("Translate failed:", lastError?.message || lastError);
+  return clean;
 }
 
 io.on("connection", socket => {
   console.log("Connected:", socket.id);
+
+  profiles.set(socket.id, {
+    country: null,
+    gender: "any",
+    targetLanguage: "Polish"
+  });
+
   emitOnlineCount();
 
   socket.on("get-online-count", emitOnlineCount);
 
-  socket.on("find-match", () => {
+  socket.on("update-preferences", data => {
+    const old = profiles.get(socket.id) || {};
+
+    profiles.set(socket.id, {
+      ...old,
+      country: data?.country || old.country || null,
+      gender: data?.gender || old.gender || "any",
+      targetLanguage: data?.targetLanguage || old.targetLanguage || "Polish"
+    });
+  });
+
+  socket.on("find-match", data => {
     cleanupSocket(socket);
 
-    if (waitingUser && waitingUser !== socket.id) {
-      const partnerSocket = io.sockets.sockets.get(waitingUser);
+    profiles.set(socket.id, {
+      country: data?.country || null,
+      gender: data?.gender || "any",
+      targetLanguage: data?.targetLanguage || "Polish"
+    });
 
-      if (!partnerSocket) {
-        waitingUser = socket.id;
-        socket.emit("waiting");
-        return;
+    let partnerId = null;
+
+    while (waitingUsers.length > 0 && !partnerId) {
+      const candidateId = waitingUsers.shift();
+
+      if (candidateId === socket.id) continue;
+
+      const candidateSocket = io.sockets.sockets.get(candidateId);
+
+      if (candidateSocket && !userRooms.has(candidateId)) {
+        partnerId = candidateId;
       }
-
-      const roomId = `room-${waitingUser}-${socket.id}`;
-
-      socket.join(roomId);
-      partnerSocket.join(roomId);
-
-      userRooms.set(socket.id, roomId);
-      userRooms.set(waitingUser, roomId);
-
-      partnerSocket.emit("matched", {
-        roomId,
-        initiator: true,
-        peerId: socket.id
-      });
-
-      socket.emit("matched", {
-        roomId,
-        initiator: false,
-        peerId: waitingUser
-      });
-
-      waitingUser = null;
-    } else {
-      waitingUser = socket.id;
-      socket.emit("waiting");
     }
+
+    if (!partnerId) {
+      waitingUsers.push(socket.id);
+      socket.emit("waiting");
+      emitOnlineCount();
+      return;
+    }
+
+    const partnerSocket = io.sockets.sockets.get(partnerId);
+
+    if (!partnerSocket) {
+      waitingUsers.push(socket.id);
+      socket.emit("waiting");
+      emitOnlineCount();
+      return;
+    }
+
+    const roomId = `room-${partnerId}-${socket.id}`;
+
+    socket.join(roomId);
+    partnerSocket.join(roomId);
+
+    userRooms.set(socket.id, roomId);
+    userRooms.set(partnerId, roomId);
+
+    partnerSocket.emit("matched", {
+      roomId,
+      initiator: true,
+      peerId: socket.id
+    });
+
+    socket.emit("matched", {
+      roomId,
+      initiator: false,
+      peerId: partnerId
+    });
 
     emitOnlineCount();
   });
@@ -142,7 +234,6 @@ io.on("connection", socket => {
   socket.on("leave-room", ({ roomId }) => {
     if (roomId) {
       socket.to(roomId).emit("partner-left");
-      socket.leave(roomId);
     }
 
     cleanupSocket(socket);
@@ -150,14 +241,17 @@ io.on("connection", socket => {
   });
 
   socket.on("offer", ({ roomId, offer }) => {
+    if (!roomId || !offer) return;
     socket.to(roomId).emit("offer", { offer });
   });
 
   socket.on("answer", ({ roomId, answer }) => {
+    if (!roomId || !answer) return;
     socket.to(roomId).emit("answer", { answer });
   });
 
   socket.on("ice-candidate", ({ roomId, candidate }) => {
+    if (!roomId || !candidate) return;
     socket.to(roomId).emit("ice-candidate", { candidate });
   });
 
@@ -165,11 +259,11 @@ io.on("connection", socket => {
     if (!roomId || !text) return;
 
     socket.to(roomId).emit("peer-typing", {
-      text
+      text: String(text).slice(0, 500)
     });
   });
 
-  socket.on("speech-final", async ({ roomId, text, targetLanguage }) => {
+  socket.on("speech-final", async ({ roomId, text }) => {
     try {
       if (!roomId || !text) return;
       if (busySockets.has(socket.id)) return;
@@ -179,20 +273,21 @@ io.on("connection", socket => {
       const cleanText = String(text).trim().slice(0, 500);
       if (!cleanText) return;
 
-      const translated = await translateText(
-        cleanText,
-        targetLanguage || "Polish"
-      );
+      const partnerId = getPartnerId(roomId, socket.id);
+      const partnerProfile = profiles.get(partnerId) || {};
+      const targetLanguage = partnerProfile.targetLanguage || "Polish";
+
+      const translated = await translateText(cleanText, targetLanguage);
 
       socket.to(roomId).emit("translation-result", {
         original: cleanText,
         translated,
-        targetLanguage: targetLanguage || "Polish"
+        targetLanguage
       });
     } catch (error) {
       console.error("Translation error:", error.message);
 
-      socket.emit("translation-error", {
+      socket.to(roomId).emit("translation-error", {
         message: "Translation temporarily unavailable."
       });
     } finally {
@@ -202,7 +297,10 @@ io.on("connection", socket => {
 
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
+
     cleanupSocket(socket);
+    profiles.delete(socket.id);
+
     emitOnlineCount();
   });
 });
