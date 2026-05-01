@@ -1,3 +1,6 @@
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first");
+
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
@@ -23,12 +26,13 @@ const io = new Server(server, {
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  maxRetries: 3,
-  timeout: 60000
+  maxRetries: 0,
+  timeout: 90000
 });
 
 let waitingUser = null;
 const userRooms = new Map();
+const socketBusy = new Map();
 
 function emitOnlineCount() {
   io.emit("online-count", {
@@ -43,7 +47,7 @@ function sleep(ms) {
 async function transcribeAudio(audioFile) {
   let lastError;
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
       return await openai.audio.transcriptions.create({
         file: audioFile,
@@ -51,8 +55,13 @@ async function transcribeAudio(audioFile) {
       });
     } catch (error) {
       lastError = error;
-      console.log("Transcription retry:", attempt, error?.message || error);
-      await sleep(1200 * attempt);
+
+      console.log(
+        `Transcription retry ${attempt}:`,
+        error?.message || error?.cause?.code || error
+      );
+
+      await sleep(2500 * attempt);
     }
   }
 
@@ -60,23 +69,52 @@ async function transcribeAudio(audioFile) {
 }
 
 async function translateText(text, targetLanguage = "English") {
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are a live video chat translation engine. Detect the source language and translate naturally. Return only the translated text. No explanations."
-      },
-      {
-        role: "user",
-        content: `Translate this to ${targetLanguage}:\n\n${text}`
-      }
-    ]
-  });
+  let lastError;
 
-  return completion.choices?.[0]?.message?.content?.trim() || "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a live video chat translation engine. Detect the source language and translate naturally. Return only the translated text. No explanations."
+          },
+          {
+            role: "user",
+            content: `Translate this to ${targetLanguage}:\n\n${text}`
+          }
+        ]
+      });
+
+      return completion.choices?.[0]?.message?.content?.trim() || "";
+    } catch (error) {
+      lastError = error;
+      console.log(`Translation retry ${attempt}:`, error?.message || error);
+      await sleep(1800 * attempt);
+    }
+  }
+
+  throw lastError;
 }
+
+app.get("/openai-test", async (req, res) => {
+  try {
+    const translated = await translateText("Cześć, jak się masz?", "English");
+
+    res.json({
+      ok: true,
+      translated
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      message: error?.message || "OpenAI test failed",
+      code: error?.cause?.code || error?.code || null
+    });
+  }
+});
 
 io.on("connection", (socket) => {
   console.log("Connected:", socket.id);
@@ -153,7 +191,7 @@ io.on("connection", (socket) => {
         targetLanguage: targetLanguage || "English"
       });
     } catch (error) {
-      console.error("Translation error:", error);
+      console.error("Translation error:", error?.message || error);
 
       socket.emit("translation-error", {
         message: "Translation failed"
@@ -165,12 +203,24 @@ io.on("connection", (socket) => {
     try {
       if (!roomId || !audioBase64) return;
 
+      if (socketBusy.get(socket.id)) {
+        return;
+      }
+
+      socketBusy.set(socket.id, true);
+
       const base64Data = audioBase64.split(",")[1];
-      if (!base64Data) return;
+      if (!base64Data) {
+        socketBusy.set(socket.id, false);
+        return;
+      }
 
       const audioBuffer = Buffer.from(base64Data, "base64");
 
-      if (!audioBuffer || audioBuffer.length < 1500) return;
+      if (!audioBuffer || audioBuffer.length < 3000) {
+        socketBusy.set(socket.id, false);
+        return;
+      }
 
       console.log("Audio size:", audioBuffer.length);
 
@@ -179,12 +229,14 @@ io.on("connection", (socket) => {
       });
 
       const transcription = await transcribeAudio(audioFile);
-
-      console.log("TRANSCRIPTION:", transcription.text);
-
       const original = transcription.text?.trim();
 
-      if (!original || original.length < 2) return;
+      console.log("TRANSCRIPTION:", original);
+
+      if (!original || original.length < 2) {
+        socketBusy.set(socket.id, false);
+        return;
+      }
 
       const translated = await translateText(
         original,
@@ -196,8 +248,16 @@ io.on("connection", (socket) => {
         translated,
         targetLanguage: targetLanguage || "English"
       });
+
+      socketBusy.set(socket.id, false);
     } catch (error) {
-      console.error("Audio translation error:", error);
+      socketBusy.set(socket.id, false);
+
+      console.error("Audio translation error:", {
+        message: error?.message,
+        code: error?.code || error?.cause?.code,
+        cause: error?.cause?.message || error?.cause
+      });
 
       socket.emit("translation-error", {
         message: "Audio translation failed"
@@ -207,6 +267,8 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
+
+    socketBusy.delete(socket.id);
 
     if (waitingUser === socket.id) {
       waitingUser = null;
@@ -225,6 +287,6 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });
