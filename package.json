@@ -1,7 +1,7 @@
 {
   "name": "live-translate-server",
   "version": "1.0.0",
-  "description": "Voxlify AI WebRTC signaling + live translation server",
+  "description": "Voxlify WebRTC signaling + browser speech text translation server",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -10,7 +10,6 @@
   },
   "keywords": [
     "webrtc",
-    "ai",
     "translation",
     "socket.io",
     "voxlify"
@@ -20,8 +19,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "socket.io": "^4.7.5",
-    "openai": "^4.68.0"
+    "socket.io": "^4.7.5"
   },
   "engines": {
     "node": ">=20"
