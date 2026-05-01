@@ -1,27 +1,18 @@
 {
   "name": "live-translate-server",
   "version": "1.0.0",
-  "description": "Voxlify WebRTC signaling + browser speech text translation server",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
   },
-  "keywords": [
-    "webrtc",
-    "translation",
-    "socket.io",
-    "voxlify"
-  ],
-  "author": "Voxlify",
-  "license": "ISC",
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2",
+    "express": "^4.18.2",
     "socket.io": "^4.7.5"
   },
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   }
 }
