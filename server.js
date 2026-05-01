@@ -4,7 +4,6 @@ const cors = require("cors");
 const { Server } = require("socket.io");
 
 const app = express();
-
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json({ limit: "2mb" }));
 
@@ -18,22 +17,29 @@ const io = new Server(server, {
 
 const waitingUsers = [];
 const userRooms = new Map();
-const busySockets = new Set();
 const profiles = new Map();
+const busySockets = new Set();
 const translationCache = new Map();
 
 const languageMap = {
-  English: "en",
-  Polish: "pl",
-  Norwegian: "no",
-  Spanish: "es",
-  German: "de",
-  French: "fr",
-  Italian: "it",
-  Portuguese: "pt",
-  Japanese: "ja",
-  Korean: "ko",
-  Arabic: "ar"
+  Afrikaans: "af", Albanian: "sq", Amharic: "am", Arabic: "ar", Armenian: "hy",
+  Azerbaijani: "az", Basque: "eu", Belarusian: "be", Bengali: "bn", Bosnian: "bs",
+  Bulgarian: "bg", Catalan: "ca", Cebuano: "ceb", Chinese: "zh", Croatian: "hr",
+  Czech: "cs", Danish: "da", Dutch: "nl", English: "en", Esperanto: "eo",
+  Estonian: "et", Finnish: "fi", French: "fr", Galician: "gl", Georgian: "ka",
+  German: "de", Greek: "el", Gujarati: "gu", Haitian: "ht", Hausa: "ha",
+  Hebrew: "iw", Hindi: "hi", Hungarian: "hu", Icelandic: "is", Igbo: "ig",
+  Indonesian: "id", Irish: "ga", Italian: "it", Japanese: "ja", Javanese: "jw",
+  Kannada: "kn", Kazakh: "kk", Khmer: "km", Korean: "ko", Kurdish: "ku",
+  Kyrgyz: "ky", Lao: "lo", Latin: "la", Latvian: "lv", Lithuanian: "lt",
+  Luxembourgish: "lb", Macedonian: "mk", Malagasy: "mg", Malay: "ms", Malayalam: "ml",
+  Maltese: "mt", Maori: "mi", Marathi: "mr", Mongolian: "mn", Nepali: "ne",
+  Norwegian: "no", Pashto: "ps", Persian: "fa", Polish: "pl", Portuguese: "pt",
+  Punjabi: "pa", Romanian: "ro", Russian: "ru", Serbian: "sr", Slovak: "sk",
+  Slovenian: "sl", Somali: "so", Spanish: "es", Sundanese: "su", Swahili: "sw",
+  Swedish: "sv", Tamil: "ta", Telugu: "te", Thai: "th", Turkish: "tr",
+  Ukrainian: "uk", Urdu: "ur", Uzbek: "uz", Vietnamese: "vi", Welsh: "cy",
+  Xhosa: "xh", Yiddish: "yi", Yoruba: "yo", Zulu: "zu"
 };
 
 app.get("/", (req, res) => {
@@ -88,16 +94,14 @@ function cleanupSocket(socket) {
   busySockets.delete(socket.id);
 }
 
-async function translateText(text, targetLanguage = "Polish") {
-  const target = languageMap[targetLanguage] || "pl";
-  const clean = String(text || "").trim().slice(0, 500);
+async function translateText(text, targetLanguage = "English") {
+  const target = languageMap[targetLanguage] || "en";
+  const clean = String(text || "").trim().slice(0, 700);
 
   if (!clean) return "";
 
   const cacheKey = `${target}:${clean.toLowerCase()}`;
-  if (translationCache.has(cacheKey)) {
-    return translationCache.get(cacheKey);
-  }
+  if (translationCache.has(cacheKey)) return translationCache.get(cacheKey);
 
   try {
     const url =
@@ -114,9 +118,7 @@ async function translateText(text, targetLanguage = "Polish") {
       }
     });
 
-    if (!response.ok) {
-      throw new Error(`Google translate HTTP ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`Translate HTTP ${response.status}`);
 
     const data = await response.json();
 
@@ -124,9 +126,9 @@ async function translateText(text, targetLanguage = "Polish") {
       ? data[0].map(part => part[0]).join("")
       : clean;
 
-    translationCache.set(cacheKey, translated);
+    translationCache.set(cacheKey, translated || clean);
 
-    if (translationCache.size > 1000) {
+    if (translationCache.size > 3000) {
       const firstKey = translationCache.keys().next().value;
       translationCache.delete(firstKey);
     }
@@ -144,7 +146,7 @@ io.on("connection", socket => {
   profiles.set(socket.id, {
     country: null,
     gender: "any",
-    targetLanguage: "Polish"
+    speakLanguage: "English"
   });
 
   emitOnlineCount();
@@ -158,7 +160,7 @@ io.on("connection", socket => {
       ...old,
       country: data?.country || old.country || null,
       gender: data?.gender || old.gender || "any",
-      targetLanguage: data?.targetLanguage || old.targetLanguage || "Polish"
+      speakLanguage: data?.speakLanguage || old.speakLanguage || "English"
     });
   });
 
@@ -168,14 +170,13 @@ io.on("connection", socket => {
     profiles.set(socket.id, {
       country: data?.country || null,
       gender: data?.gender || "any",
-      targetLanguage: data?.targetLanguage || "Polish"
+      speakLanguage: data?.speakLanguage || "English"
     });
 
     let partnerId = null;
 
     while (waitingUsers.length > 0 && !partnerId) {
       const candidateId = waitingUsers.shift();
-
       if (candidateId === socket.id) continue;
 
       const candidateSocket = io.sockets.sockets.get(candidateId);
@@ -186,10 +187,7 @@ io.on("connection", socket => {
     }
 
     if (!partnerId) {
-      if (!waitingUsers.includes(socket.id)) {
-        waitingUsers.push(socket.id);
-      }
-
+      if (!waitingUsers.includes(socket.id)) waitingUsers.push(socket.id);
       socket.emit("waiting");
       emitOnlineCount();
       return;
@@ -198,10 +196,7 @@ io.on("connection", socket => {
     const partnerSocket = io.sockets.sockets.get(partnerId);
 
     if (!partnerSocket) {
-      if (!waitingUsers.includes(socket.id)) {
-        waitingUsers.push(socket.id);
-      }
-
+      if (!waitingUsers.includes(socket.id)) waitingUsers.push(socket.id);
       socket.emit("waiting");
       emitOnlineCount();
       return;
@@ -230,11 +225,7 @@ io.on("connection", socket => {
     emitOnlineCount();
   });
 
-  socket.on("leave-room", ({ roomId }) => {
-    if (roomId) {
-      socket.to(roomId).emit("partner-left");
-    }
-
+  socket.on("leave-room", () => {
     cleanupSocket(socket);
     emitOnlineCount();
   });
@@ -257,11 +248,8 @@ io.on("connection", socket => {
   socket.on("speech-interim", ({ roomId, text }) => {
     if (!roomId || !text) return;
 
-    const cleanText = String(text).trim().slice(0, 500);
-    if (!cleanText) return;
-
     socket.to(roomId).emit("peer-typing", {
-      text: cleanText
+      text: String(text).trim().slice(0, 500)
     });
   });
 
@@ -270,14 +258,14 @@ io.on("connection", socket => {
       if (!roomId || !text) return;
       if (busySockets.has(socket.id)) return;
 
-      const cleanText = String(text).trim().slice(0, 500);
+      const cleanText = String(text).trim().slice(0, 700);
       if (!cleanText) return;
 
       const partnerId = getPartnerId(roomId, socket.id);
       if (!partnerId) return;
 
       const partnerProfile = profiles.get(partnerId) || {};
-      const targetLanguage = partnerProfile.targetLanguage || "Polish";
+      const targetLanguage = partnerProfile.speakLanguage || "English";
 
       busySockets.add(socket.id);
 
@@ -290,14 +278,6 @@ io.on("connection", socket => {
       });
     } catch (error) {
       console.error("Translation error:", error.message);
-
-      const partnerId = getPartnerId(roomId, socket.id);
-
-      if (partnerId) {
-        io.to(partnerId).emit("translation-error", {
-          message: "Translation temporarily unavailable."
-        });
-      }
     } finally {
       busySockets.delete(socket.id);
     }
@@ -305,10 +285,8 @@ io.on("connection", socket => {
 
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
-
     cleanupSocket(socket);
     profiles.delete(socket.id);
-
     emitOnlineCount();
   });
 });
