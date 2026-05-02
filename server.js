@@ -3,6 +3,7 @@ const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
 const nodemailer = require("nodemailer");
+const ADMIN_TOKEN = "voxlify-admin-2026";
 
 const app = express();
 
@@ -26,12 +27,22 @@ const SUPPORT_EMAIL = "support@voxlify.app";
 const SUPPORT_EMAIL_PASS = "55338734Aaa$";
 
 const transporter = nodemailer.createTransport({
-  host: "smtp.cyberfolks.pl",
+  host: "s5.cyber-folks.pl",
   port: 465,
   secure: true,
   auth: {
-    user: "support@voxlify.app",
-    pass: "55338734Aaa$"
+    user: SUPPORT_EMAIL,
+    pass: SUPPORT_EMAIL_PASS
+  },
+  tls: {
+    rejectUnauthorized: false
+  }
+});
+transporter.verify((error, success) => {
+  if (error) {
+    console.error("SMTP verify error:", error);
+  } else {
+    console.log("SMTP ready:", success);
   }
 });
 
