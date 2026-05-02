@@ -113,7 +113,23 @@ function getPartnerId(roomId, socketId) {
 
   return null;
 }
+app = "live-translate-server"
+primary_region = "ams"
 
+[env]
+PORT = "3000"
+
+[http_service]
+auto_start_machines = true
+auto_stop_machines = false
+force_https = true
+internal_port = 3000
+min_machines_running = 1
+
+[[vm]]
+cpu_kind = "shared"
+cpus = 1
+memory = "1gb"
 function cleanupSocket(socket, options = {}) {
   removeFromWaiting(socket.id);
 
