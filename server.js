@@ -33,13 +33,9 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: SUPPORT_EMAIL,
     pass: SUPPORT_EMAIL_PASS
-  }
-});
-transporter.verify((error, success) => {
-  if (error) {
-    console.error("SMTP verify error:", error);
-  } else {
-    console.log("SMTP ready:", success);
+  },
+  tls: {
+    servername: "s5.cyber-folks.pl"
   }
 });
 
