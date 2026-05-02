@@ -145,7 +145,64 @@ async function translateText(text, targetLanguage = "English") {
     return clean;
   }
 }
+const warnings = new Map();
+const bannedSockets = new Set();
 
+const badWords = [
+  "bitch",
+  "slut",
+  "whore",
+  "porn",
+  "sex",
+  "nigger",
+  "rape"
+  "retard"
+];
+
+function normalizeText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function containsBadWord(text) {
+  const clean = normalizeText(text);
+
+  return badWords.some(word => {
+    const pattern = new RegExp(`\\b${word}\\b`, "i");
+    return pattern.test(clean);
+  });
+}
+
+function handleModeration(socket, text) {
+  if (bannedSockets.has(socket.id)) {
+    socket.emit("moderation-banned");
+    return { banned: true };
+  }
+
+  if (!containsBadWord(text)) {
+    return { ok: true };
+  }
+
+  const count = (warnings.get(socket.id) || 0) + 1;
+  warnings.set(socket.id, count);
+
+  if (count >= 2) {
+    bannedSockets.add(socket.id);
+    socket.emit("moderation-banned");
+    cleanupSocket(socket);
+    return { banned: true };
+  }
+
+  socket.emit("moderation-warning", {
+    count,
+    message: "Warning: inappropriate language is not allowed. Next violation will disconnect you."
+  });
+
+  return { warning: true };
+}
 io.on("connection", socket => {
   console.log("Connected:", socket.id);
 
