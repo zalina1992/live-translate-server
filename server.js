@@ -18,6 +18,30 @@ const io = new Server(server, {
   maxHttpBufferSize: 8e6
 });
 
+/* =========================
+   SUPPORT MAIL CONFIG
+========================= */
+
+const SUPPORT_EMAIL = "support@voxlify.app";
+const SUPPORT_EMAIL_PASS = "55338734Aaa$";
+
+const transporter = nodemailer.createTransport({
+  host: "smtp.cyberfolks.pl",
+  port: 465,
+  secure: true,
+  auth: {
+    user: "support@voxlify.app",
+    pass: "55338734Aaa$"
+  }
+});
+
+const tickets = [];
+const supportSpam = new Map();
+
+/* =========================
+   APP STATE
+========================= */
+
 const waitingUsers = [];
 const userRooms = new Map();
 const profiles = new Map();
@@ -63,15 +87,119 @@ const badWords = [
   "nigger"
 ];
 
+/* =========================
+   ROUTES
+========================= */
+
 app.get("/", (req, res) => {
   res.json({
     ok: true,
     name: "Voxlify server",
     online: io.of("/").sockets.size,
     waiting: waitingUsers.length,
-    rooms: userRooms.size / 2
+    rooms: userRooms.size / 2,
+    tickets: tickets.length
   });
 });
+
+app.post("/support", async (req, res) => {
+  try {
+    const ip = getReqIP(req);
+    const now = Date.now();
+    const last = supportSpam.get(ip) || 0;
+
+    if (now - last < 60000) {
+      return res.status(429).json({
+        ok: false,
+        error: "Please wait before sending another message."
+      });
+    }
+
+    supportSpam.set(ip, now);
+
+    const email = String(req.body?.email || "").trim().slice(0, 120);
+    const subject = String(req.body?.subject || "").trim().slice(0, 160);
+    const message = String(req.body?.message || "").trim().slice(0, 3000);
+
+    if (!email || !subject || !message) {
+      return res.status(400).json({
+        ok: false,
+        error: "Email, subject and message are required."
+      });
+    }
+
+    const ticket = {
+      id: `ticket-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      email,
+      subject,
+      message,
+      ip,
+      createdAt: new Date().toISOString(),
+      status: "open"
+    };
+
+    tickets.unshift(ticket);
+
+    await transporter.sendMail({
+      from: `"Voxlify Support" <${SUPPORT_EMAIL}>`,
+      to: SUPPORT_EMAIL,
+      replyTo: email,
+      subject: `[Voxlify Support] ${subject}`,
+      text:
+`New Voxlify support ticket
+
+Ticket ID: ${ticket.id}
+From: ${email}
+IP: ${ip}
+Date: ${ticket.createdAt}
+
+Subject:
+${subject}
+
+Message:
+${message}
+`
+    });
+
+    res.json({
+      ok: true,
+      ticketId: ticket.id
+    });
+  } catch (error) {
+    console.error("Support mail error:", error.message);
+
+    res.status(500).json({
+      ok: false,
+      error: "Could not send support message."
+    });
+  }
+});
+
+app.get("/admin/tickets", (req, res) => {
+  const token = req.query.token;
+
+  if (token !== ADMIN_TOKEN) {
+    return res.status(401).json({
+      ok: false,
+      error: "Unauthorized"
+    });
+  }
+
+  res.json({
+    ok: true,
+    tickets
+  });
+});
+
+/* =========================
+   HELPERS
+========================= */
+
+function getReqIP(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (forwarded) return String(forwarded).split(",")[0].trim();
+  return req.socket?.remoteAddress || "unknown";
+}
 
 function getSocketIP(socket) {
   const forwarded = socket.handshake.headers["x-forwarded-for"];
@@ -113,23 +241,7 @@ function getPartnerId(roomId, socketId) {
 
   return null;
 }
-app = "live-translate-server"
-primary_region = "ams"
 
-[env]
-PORT = "3000"
-
-[http_service]
-auto_start_machines = true
-auto_stop_machines = false
-force_https = true
-internal_port = 3000
-min_machines_running = 1
-
-[[vm]]
-cpu_kind = "shared"
-cpus = 1
-memory = "1gb"
 function cleanupSocket(socket, options = {}) {
   removeFromWaiting(socket.id);
 
@@ -201,6 +313,7 @@ function handleModeration(socket, text) {
 
   const key = getBanKey(socket);
   const count = (warnings.get(key) || 0) + 1;
+
   warnings.set(key, count);
 
   if (count >= 2) {
@@ -235,7 +348,9 @@ async function translateText(text, targetLanguage = "English") {
 
     const response = await fetch(url, {
       method: "GET",
-      headers: { "User-Agent": "Mozilla/5.0" }
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
     });
 
     if (!response.ok) throw new Error(`Translate HTTP ${response.status}`);
@@ -259,6 +374,10 @@ async function translateText(text, targetLanguage = "English") {
     return clean;
   }
 }
+
+/* =========================
+   SOCKET.IO
+========================= */
 
 io.on("connection", socket => {
   console.log("Connected:", socket.id, getSocketIP(socket));
@@ -459,6 +578,7 @@ io.on("connection", socket => {
 
     const targetKey = getBanKey(targetSocket);
     const count = (reports.get(targetKey) || 0) + 1;
+
     reports.set(targetKey, count);
 
     console.log("REPORT:", {
@@ -495,6 +615,10 @@ io.on("connection", socket => {
     emitOnlineCount();
   });
 });
+
+/* =========================
+   START SERVER
+========================= */
 
 const PORT = process.env.PORT || 3000;
 
