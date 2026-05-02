@@ -178,16 +178,18 @@ ${message}
     });
   } catch (error) {
     console.error("Support mail error:", {
-  message: error.message,
-  code: error.code,
-  command: error.command,
-  response: error.response,
-  responseCode: error.responseCode
-});
+      message: error.message,
+      code: error.code,
+      command: error.command,
+      response: error.response,
+      responseCode: error.responseCode
+    });
 
     res.status(500).json({
       ok: false,
-      error: "Could not send support message."
+      error: error.message,
+      code: error.code,
+      response: error.response
     });
   }
 });
