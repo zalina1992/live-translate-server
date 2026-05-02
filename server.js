@@ -366,6 +366,16 @@ socket.on("leave-room", data => {
       const cleanText = String(text).trim().slice(0, 700);
       if (!cleanText) return;
 
+      const moderation = handleModeration(socket, cleanText);
+
+if (moderation.banned) {
+  return;
+}
+
+if (moderation.warning) {
+  return;
+}
+
       const partnerId = getPartnerId(roomId, socket.id);
       if (!partnerId) return;
 
