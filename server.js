@@ -144,13 +144,12 @@ app.post("/support", async (req, res) => {
 
     tickets.unshift(ticket);
 
-    await transporter.sendMail({
-      from: `"Voxlify Support" <${SUPPORT_EMAIL}>`,
-      to: SUPPORT_EMAIL,
-      replyTo: email,
-      subject: `[Voxlify Support] ${subject}`,
-      text:
-`New Voxlify support ticket
+await transporter.sendMail({
+  from: SUPPORT_EMAIL,
+  to: SUPPORT_EMAIL,
+  replyTo: email,
+  subject: `[Voxlify Support] ${subject}`,
+  text: `New Voxlify support ticket
 
 Ticket ID: ${ticket.id}
 From: ${email}
@@ -161,9 +160,8 @@ Subject:
 ${subject}
 
 Message:
-${message}
-`
-    });
+${message}`
+});
 
     res.json({
       ok: true,
