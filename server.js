@@ -177,7 +177,13 @@ ${message}
       ticketId: ticket.id
     });
   } catch (error) {
-    console.error("Support mail error:", error.message);
+    console.error("Support mail error:", {
+  message: error.message,
+  code: error.code,
+  command: error.command,
+  response: error.response,
+  responseCode: error.responseCode
+});
 
     res.status(500).json({
       ok: false,
