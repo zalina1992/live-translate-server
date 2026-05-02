@@ -33,9 +33,6 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: SUPPORT_EMAIL,
     pass: SUPPORT_EMAIL_PASS
-  },
-  tls: {
-    rejectUnauthorized: false
   }
 });
 transporter.verify((error, success) => {
