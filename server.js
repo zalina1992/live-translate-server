@@ -17,13 +17,13 @@ const JWT_SECRET = process.env.JWT_SECRET || "jakis_dlugi_secret_123";
 
 const app = express();
 
-app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
+app.use(cors({ origin: "*", methods: ["GET", "POST", "PUT"] }));
 app.use(express.json({ limit: "8mb" }));
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
+  cors: { origin: "*", methods: ["GET", "POST", "PUT"] },
   pingTimeout: 30000,
   pingInterval: 15000,
   maxHttpBufferSize: 8e6
@@ -34,7 +34,7 @@ const io = new Server(server, {
 ========================= */
 
 const SUPPORT_EMAIL = "support@voxlify.app";
-const SUPPORT_EMAIL_PASS = "55338734Aaa$";
+const SUPPORT_EMAIL_PASS = process.env.SUPPORT_EMAIL_PASS;
 
 const transporter = nodemailer.createTransport({
   host: "s5.cyber-folks.pl",
