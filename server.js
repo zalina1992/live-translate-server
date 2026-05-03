@@ -590,7 +590,26 @@ io.on("connection", socket => {
       speakLanguage: data?.speakLanguage || old.speakLanguage || "English"
     });
   });
+socket.on("auth", async data => {
+  try {
+    const token = data?.token;
+    if (!token) return;
 
+    const decoded = jwt.verify(token, JWT_SECRET);
+    socket.data.userId = decoded.userId;
+
+    const result = await pool.query(
+      "SELECT id, nickname, avatar_url, country, gender, speak_language, likes_count, is_premium FROM users WHERE id = $1",
+      [decoded.userId]
+    );
+
+    if (result.rows[0]) {
+      socket.data.user = result.rows[0];
+    }
+  } catch (error) {
+    console.log("Socket auth failed");
+  }
+});
   socket.on("find-match", data => {
     if (isBanned(socket)) return banSocket(socket, "banned");
     if (userRooms.has(socket.id)) return;
