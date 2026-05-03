@@ -248,7 +248,7 @@ app.get("/me", auth, async (req, res) => {
 app.put("/me/profile", auth, async (req, res) => {
   try {
     const nickname = String(req.body?.nickname || "").trim().slice(0, 40);
-    const avatarUrl = String(req.body?.avatar_url || "").trim().slice(0, 500);
+    const avatarUrl = String(req.body?.avatar_url || "").trim().slice(0, 2000000);
     const country = String(req.body?.country || "").trim().slice(0, 10);
     const gender = String(req.body?.gender || "").trim().slice(0, 20);
     const speakLanguage = String(req.body?.speak_language || "").trim().slice(0, 60);
