@@ -781,7 +781,30 @@ io.on("connection", socket => {
       ok: true
     });
   });
+socket.on("like-user", async ({ roomId }) => {
+  try {
+    if (!roomId) return;
 
+    const partnerId = getPartnerId(roomId, socket.id);
+    if (!partnerId) return;
+
+    const targetSocket = io.sockets.sockets.get(partnerId);
+    if (!targetSocket) return;
+
+    const targetUserId = targetSocket.data?.userId;
+
+    if (targetUserId) {
+      await pool.query(
+        "UPDATE users SET likes_count = likes_count + 1 WHERE id = $1",
+        [targetUserId]
+      );
+    }
+
+    socket.emit("like-received", { ok: true });
+  } catch (error) {
+    console.error("Like error:", error);
+  }
+});
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
 
