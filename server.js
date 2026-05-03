@@ -13,7 +13,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || "jakis_dlugi_secret_123";
+const JWT_SECRET = process.env.JWT_SECRET;
 
 const app = express();
 
