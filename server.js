@@ -123,29 +123,6 @@ function auth(req, res, next) {
 /* =========================
    ROUTES
 ========================= */
-app.get("/test-register", async (req, res) => {
-  try {
-    const email = "test" + Date.now() + "@test.com";
-    const passwordHash = await bcrypt.hash("123456", 10);
-
-    const result = await pool.query(
-      `INSERT INTO users (email, password_hash, nickname)
-       VALUES ($1, $2, $3)
-       RETURNING id, email, nickname`,
-      [email, passwordHash, "Adrian"]
-    );
-
-    res.json({
-      ok: true,
-      user: result.rows[0]
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
 app.get("/", (req, res) => {
   res.json({
     ok: true,
